@@ -1,0 +1,171 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- dev
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  backendAzureRmResourceGroupName: 'terraform-backend-rg'
+
+stages:
+- stage: Deploy
+  displayName: "Deploy Infrastructure"
+  jobs:
+  - job: TerraformApply
+    displayName: "Terraform Apply"  
+    steps:
+    - script: echo Hello, world!
+      displayName: 'Run a one-line script'
+
+    - script: |
+        echo Add other tasks to build, test, and deploy your project.
+        echo See https://aka.ms/yaml
+      displayName: 'Run a multi-line script'
+
+    - task: TerraformInstaller@1
+      displayName: 'Terraform - Install'
+      inputs:
+        terraformVersion: 'latest'
+        
+    - task: TerraformTaskV4@4
+      displayName: 'Terraform - Check Version'
+      inputs:
+        provider: 'azurerm'
+        command: 'custom'
+        commandOptions: 'version'
+        outputTo: 'console'
+        customCommand: 'version'
+        environmentServiceNameAzureRM: 'NewTerraform'
+      
+    - task: TerraformTaskV4@4
+      displayName: 'Terraform - Initialize'
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        backendServiceArm: 'NewTerraform'
+        backendAzureRmResourceGroupName: '$(backendAzureRmResourceGroupName)'
+        backendAzureRmStorageAccountName: 'demoterraformstg'
+        backendAzureRmContainerName: 'azureterraformstate'
+        backendAzureRmKey: 'terraform.tfstate'
+    
+    - task: DownloadSecureFile@1
+      name: sshPublicKey
+      displayName: ' Download Public Key'
+      inputs:
+        secureFile: 'id_ed25519.pub'
+    
+    - task: DownloadSecureFile@1
+      name: sshPrivateKey
+      displayName: ' Download Private Key'
+      inputs:
+        secureFile: 'id_ed25519'
+    
+    - script: |
+        mkdir -p ~/.ssh
+        cp $(Agent.TempDirectory)/id_ed25519.pub ~/.ssh/id_ed25519.pub
+        cp $(Agent.TempDirectory)/id_ed25519 ~/.ssh/id_ed25519
+        chmod 640 ~/.ssh/id_ed25519.pub
+        chmod 600 ~/.ssh/id_ed25519
+      displayName: ' Setup SSH Keys'
+      
+    - task: TerraformTaskV4@4
+      displayName: 'Terraform - Validate'
+      inputs:
+        provider: 'azurerm'
+        command: 'validate'
+    - script: |
+        echo "Ensuring apache-intsll.sh is avaiable...."
+        ls -l
+      displayName: "Check Apache install Script"
+    
+
+    - task: TerraformTaskV4@4
+      displayName: 'Terraform Plan'
+      inputs:
+        provider: 'azurerm'
+        command: 'plan'
+        commandOptions: '-out=tfplan'
+        environmentServiceNameAzureRM: 'NewTerraform'
+
+    - task: TerraformTaskV4@4
+      displayName: 'Terraform Apply'    
+      inputs:
+        provider: 'azurerm'
+        command: 'apply'
+        commandOptions: '-auto-approve tfplan'
+        environmentServiceNameAzureRM: 'NewTerraform'
+
+      
+- stage: ApprovalBeforeDestroy
+  displayName: "Approval Before Destroy"
+  dependsOn: Deploy
+  condition: succeeded()
+  jobs:
+    - job: WaitForApproval
+      displayName: "Wait for Manual Approval"
+      pool: server
+      timeoutInMinutes: 15
+      steps:
+
+      - task: ManualValidation@0
+        displayName: "Manual Approval to Destroy"
+        inputs:
+          notifyUsers: 'akshesh357@hotmail.com'
+          instructions: 'please Approve Terrafrom Destroy'
+          onTimeout: reject 
+
+
+- stage: Destroy
+  displayName: 'Destroy Infra'
+  dependsOn: ApprovalBeforeDestroy
+  condition: succeeded()
+  jobs:
+    - job: TerraformDestroy
+      displayName: "Terraform Destroy"
+      pool:
+        vmimage: ubuntu-latest
+      steps:     
+      - task: TerraformTaskV4@4
+        displayName: 'Terraform - Intialize'    
+        inputs:
+          provider: 'azurerm'
+          command: 'init'
+          backendServiceArm: 'NewTerraform'
+          backendAzureRmResourceGroupName: 'terraform-backend-rg'
+          backendAzureRmStorageAccountName: 'demoterraformstg'
+          backendAzureRmContainerName: 'azureterraformstate'
+          backendAzureRmKey: 'terraform.tfstate'
+
+      
+      - task: DownloadSecureFile@1
+        name: sshPublicKey
+        displayName: ' Download Public Key'
+        inputs:
+          secureFile: 'id_ed25519.pub'
+      
+      - task: DownloadSecureFile@1
+        name: sshPrivateKey
+        displayName: ' Download Private Key'
+        inputs:
+          secureFile: 'id_ed25519'
+      
+      - script: |
+          mkdir -p ~/.ssh
+          cp $(Agent.TempDirectory)/id_ed25519.pub ~/.ssh/id_ed25519.pub
+          cp $(Agent.TempDirectory)/id_ed25519 ~/.ssh/id_ed25519
+          chmod 640 ~/.ssh/id_ed25519.pub
+          chmod 600 ~/.ssh/id_ed25519
+        displayName: ' Setup SSH Keys'
+
+      - task: TerraformTaskV4@4
+        displayName: 'Terraform Destroy'      
+        inputs:
+          provider: 'azurerm'
+          command: 'destroy'
+          commandOptions: '-auto-approve'
+          environmentServiceNameAzureRM: 'NewTerraform'
